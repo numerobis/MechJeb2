@@ -17,6 +17,7 @@ namespace MuMech
 
             //core.thrust.limitToTerminalVelocity = GUILayout.Toggle(core.thrust.limitToTerminalVelocity, "Limit to terminal velocity");
             core.thrust.LimitToTerminalVelocityInfoItem();
+            core.thrust.LimitOrbitSpeedInfoItem();
             core.thrust.LimitToPreventOverheatsInfoItem();
             core.thrust.LimitAccelerationInfoItem();
             core.thrust.LimitThrottleInfoItem();

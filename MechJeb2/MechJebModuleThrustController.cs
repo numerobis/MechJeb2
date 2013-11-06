@@ -84,6 +84,24 @@ namespace MuMech
             GUILayout.EndHorizontal();
         }
 
+        [Persistent(pass = (int)Pass.Global)]
+        public bool limitOrbitSpeed = false;
+
+        [Persistent(pass = (int)Pass.Global)]
+        public EditableDouble maxOrbitSpeed = 40;
+
+        [GeneralInfoItem("Limit orbit speed", InfoItem.Category.Thrust)]
+        public void LimitOrbitSpeedInfoItem()
+        {
+            GUILayout.BeginHorizontal();
+            GUIStyle s = new GUIStyle(GUI.skin.toggle);
+            if (limiter == LimitMode.OrbitSpeed) s.onHover.textColor = s.onNormal.textColor = Color.green;
+            limitOrbitSpeed = GUILayout.Toggle(limitOrbitSpeed, "Limit orbit speed to", s, GUILayout.Width(140));
+            maxOrbitSpeed.text = GUILayout.TextField(maxOrbitSpeed.text, GUILayout.Width(30));
+            GUILayout.Label("m/s", GUILayout.ExpandWidth(false));
+            GUILayout.EndHorizontal();
+        }
+
         [Persistent(pass = (int)Pass.Local)]
         public bool limitThrottle = false;
 
@@ -102,7 +120,8 @@ namespace MuMech
             GUILayout.EndHorizontal();
         }
 
-        public enum LimitMode { None, TerminalVelocity, Temperature, Flameout, Acceleration, Throttle }
+        public enum LimitMode { None, TerminalVelocity, Temperature, Flameout, Acceleration, Throttle, 
+            OrbitSpeed  }
         public LimitMode limiter = LimitMode.None;
 
         public float targetThrottle = 0;
@@ -255,9 +274,21 @@ namespace MuMech
 
             if (limitToTerminalVelocity)
             {
-                float limit = TerminalVelocityThrottle();
+                // limit to surface speed
+                float limit = SpeedLimitThrottle(vesselState.TerminalVelocity(), false);
                 if (limit < throttleLimit) limiter = LimitMode.TerminalVelocity;
                 throttleLimit = Mathf.Min(throttleLimit, limit);
+            }
+
+            if (limitOrbitSpeed)
+            {
+                // limit to orbit speed
+                float limit = SpeedLimitThrottle(maxOrbitSpeed, true);
+                if (limit < throttleLimit)
+                {
+                    limiter = LimitMode.OrbitSpeed;
+                    throttleLimit = limit;
+                }
             }
 
             if (limitToPreventOverheats)
@@ -303,18 +334,79 @@ namespace MuMech
             lastThrottle = s.mainThrottle;
         }
 
-        //A throttle setting that throttles down when the vertical velocity of the ship exceeds terminal velocity
-        float TerminalVelocityThrottle()
+        /// A throttle setting that throttles to reach the given speed within 0.5 seconds or 5 frames, whichever is longer.
+        public float SpeedLimitThrottle(double targetSpeed, bool isOrbitalSpeed)
         {
-            if (vesselState.altitudeASL > mainBody.RealMaxAtmosphereAltitude()) return 1.0F;
+            if (double.IsPositiveInfinity(targetSpeed))
+                return 1.0f;
+            else if (targetSpeed == 0)
+                return 0.0f;
 
-            double velocityRatio = Vector3d.Dot(vesselState.velocityVesselSurface, vesselState.up) / vesselState.TerminalVelocity();
+            // 166 m/s
+            // We are currently moving at velocity v, a vector.  We care about orbit or surface based on the bool flag.
+            // We desire that (v + ta).magnitude = targetSpeed, t is the time.
+            // a = F/m, where m (mass) is given;
+            // F = thrust + drag + gravity, where drag and gravity are easy to calculate; 
+            // thrust = throttle * (max - min) + min, where min and max are given.
+            // Solve for throttle.
+            //
+            // Let A = (t/m)(max - min)
+            // Let B = v + (t/m) (min + drag + gravity)
+            // So we can write: (v + ta) = (throttle A + B) and isolate throttle easily.
+            // Then:
+            //   throttle = -2 A.B +/- sqrt(4(A.B)^2 - 4 A.A (B.B - targetSpeed^2))
+            //              -------------------------------------------------------
+            //               2 A.A
+            // We can cancel out the 2s outside the sqrt and the 4 inside; and we want the positive solution,
+            // since the negative solution is negative throttle.
+            //   throttle = 1/A.A * (-A.B +/- sqrt( (A.B)^2 - A.A (B.B - targetSpeed^2)))
+            // We choose the positive solution of course.
+            // A = 0 if there's no throttleable thrust.
+            var t = vesselState.deltaT * 5; // reach the speed within 5 frames
+            var m = vesselState.mass;
+            var tm = t / m;
+            var v = isOrbitalSpeed ? vesselState.velocityVesselOrbit : vesselState.velocityVesselSurface;
 
-            if (velocityRatio < 1.0) return 1.0F; //full throttle if under terminal velocity
+            // Compute the drag, in kN.
+            Vector3d drag;
+            if (vesselState.altitudeASL > mainBody.RealMaxAtmosphereAltitude()) {
+                drag = new Vector3d(0, 0, 0);
+            } else {
+                // Drag goes in the opposite direction of surface velocity.
+                // scalar drag = 0.5 Cd A rho |v|^2
+                // vector drag = scalar drag * -v/|v| = -0.5 Cd A rho |v| v
+                var speedMultiplier = -0.5 * FlightGlobals.DragMultiplier * vesselState.massDrag * vesselState.atmosphericDensity;
+                var velocity = vesselState.velocityVesselSurface;
+                drag = speedMultiplier * velocity.magnitude * velocity;
+            }
 
-            //throttle down quickly as we exceed terminal velocity:
-            double falloff = 15.0;
-            return Mathf.Clamp((float)(1.0 - falloff * (velocityRatio - 1.0)), 0.0F, 1.0F);
+            // Compute the gravity, in kN.  gravityForce is in m/s^2 (it's actually an acceleration)
+            Vector3d gravity = vesselState.mass * vesselState.gravityForce;
+
+            // compute A the delta in velocity we get by going full throttle,
+            // and B the velocity we get by going zero throttle
+            var A = tm * (vesselState.thrustVectorMaxThrottle - vesselState.thrustVectorMinThrottle);
+            var B = v + tm * (vesselState.thrustVectorMinThrottle + drag + gravity);
+
+            var AB = Vector3d.Dot(A, B);
+            var AA = A.sqrMagnitude;
+            var BB = B.sqrMagnitude;
+            var quarterDiscriminant = (AB * AB - AA * (BB - targetSpeed * targetSpeed));
+
+            if (AA < 1e-6) {
+                // Physical interpretation: the throttle almost doesn't matter.  Dividing by near-zero
+                // will give garbage; open up the throttles, for all hope is lost.
+                return 1.0f;
+            }
+            if (quarterDiscriminant < 0) {
+                // Physical interpretation: no matter the throttle we can't avoid going too fast.
+                // Ignoring atmosphere and SRBs, this basically means that thrust is perpendicular to gravity.
+                // What to do... ignore it.
+                return 1.0f;
+            }
+
+            var idealThrottle = (-AB + Math.Sqrt(quarterDiscriminant)) / AA;
+            return Mathf.Clamp01((float)idealThrottle);
         }
 
         //a throttle setting that throttles down if something is close to overheating
