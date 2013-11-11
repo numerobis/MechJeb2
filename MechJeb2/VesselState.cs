@@ -42,9 +42,14 @@ namespace MuMech
         public Vector3d normalPlus;    //unit vector perpendicular to up and velocityVesselOrbit
         public Vector3d normalPlusSurface;  //unit vector perpendicular to up and velocityVesselSurface
 
-        public Vector3d gravityForce;
+        public Vector3d gravityForce; // TODO: actually acceleration, m/s^2
         [ValueInfoItem("Local gravity", InfoItem.Category.Misc, format = ValueInfoItem.SI, units = "m/s²")]
         public double localg;             //magnitude of gravityForce
+
+        public Vector3d dragForceVector; // kN
+        public Vector3d dragAccelVector { get { return dragForceVector / mass; } } // m/s^2
+        [ValueInfoItem("Drag acceleration", InfoItem.Category.Misc, format = ValueInfoItem.SI, units = "m/s²")]
+        public double dragAccel { get { return dragAccelVector.magnitude; } }
 
         //How about changing these so we store the instantaneous values and *also*
         //the smoothed MovingAverages? Sometimes we need the instantaneous value.
@@ -414,6 +419,18 @@ namespace MuMech
 
             MoI = new Vector3d(inertiaTensor[0, 0], inertiaTensor[1, 1], inertiaTensor[2, 2]);
             angularMomentum = inertiaTensor * angularVelocity;
+
+            // Compute effects of drag.
+            if (altitudeASL > mainBody.RealMaxAtmosphereAltitude()) {
+                dragForceVector = Vector3d.zero;
+            } else {
+                // Drag goes in the opposite direction of surface velocity.
+                // scalar drag = 0.5 Cd A rho |v|^2
+                // vector drag = scalar drag * -v/|v| = -0.5 Cd A rho |v| v
+                var speedMultiplier = -0.5 * FlightGlobals.DragMultiplier * massDrag * atmosphericDensity;
+                var velocity = velocityVesselSurface;
+                dragForceVector = speedMultiplier * velocity.magnitude * velocity;
+            }
         }
 
         //probably this should call a more general terminal velocity method

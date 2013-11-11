@@ -368,17 +368,7 @@ namespace MuMech
             var v = isOrbitalSpeed ? vesselState.velocityVesselOrbit : vesselState.velocityVesselSurface;
 
             // Compute the drag, in kN.
-            Vector3d drag;
-            if (vesselState.altitudeASL > mainBody.RealMaxAtmosphereAltitude()) {
-                drag = new Vector3d(0, 0, 0);
-            } else {
-                // Drag goes in the opposite direction of surface velocity.
-                // scalar drag = 0.5 Cd A rho |v|^2
-                // vector drag = scalar drag * -v/|v| = -0.5 Cd A rho |v| v
-                var speedMultiplier = -0.5 * FlightGlobals.DragMultiplier * vesselState.massDrag * vesselState.atmosphericDensity;
-                var velocity = vesselState.velocityVesselSurface;
-                drag = speedMultiplier * velocity.magnitude * velocity;
-            }
+            Vector3d drag = vesselState.dragForceVector;
 
             // Compute the gravity, in kN.  gravityForce is in m/s^2 (it's actually an acceleration)
             Vector3d gravity = vesselState.mass * vesselState.gravityForce;
