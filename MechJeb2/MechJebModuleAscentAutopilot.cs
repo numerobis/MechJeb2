@@ -179,6 +179,11 @@ namespace MuMech
                 }
             }
 
+            double desiredHeading = Math.PI / 180 * OrbitalManeuverCalculator.HeadingForInclination(desiredInclination, vesselState.latitude);
+            Vector3d desiredHeadingVector = Math.Sin(desiredHeading) * vesselState.east + Math.Cos(desiredHeading) * vesselState.north;
+            double targetFlightPathAngle = ascentPath.FlightPathAngle(vesselState.altitudeASL);
+            double desiredFlightPathAngle = targetFlightPathAngle;
+
             //transition gradually from the rotating to the non-rotating reference frame. this calculation ensures that
             //when our maximum possible apoapsis, given our orbital energy, is desiredOrbitalRadius, then we are
             //fully in the non-rotating reference frame and thus doing the correct calculations to get the right inclination
@@ -188,11 +193,15 @@ namespace MuMech
             double referenceFrameBlend = Mathf.Clamp((float)(vesselState.speedOrbital / verticalSpeedForDesiredApoapsis), 0.0F, 1.0F);
 
             Vector3d actualVelocityUnit = ((1 - referenceFrameBlend) * vesselState.velocityVesselSurfaceUnit
-                                               + referenceFrameBlend * vesselState.velocityVesselOrbitUnit).normalized;
+                                           + referenceFrameBlend * vesselState.velocityVesselOrbitUnit).normalized;
+            Vector3d horizontalBlend = ((1 - referenceFrameBlend) * vesselState.horizontalSurface
+                                       + referenceFrameBlend * vesselState.horizontalOrbit).normalized;
+            double actualFlightPathAngle = Math.Acos(Vector3d.Dot(actualVelocityUnit, horizontalBlend)) * 180.0 / Math.PI;
 
-            double desiredHeading = Math.PI / 180 * OrbitalManeuverCalculator.HeadingForInclination(desiredInclination, vesselState.latitude);
-            Vector3d desiredHeadingVector = Math.Sin(desiredHeading) * vesselState.east + Math.Cos(desiredHeading) * vesselState.north;
-            double desiredFlightPathAngle = ascentPath.FlightPathAngle(vesselState.altitudeASL);
+            if (autoThrottle && targetFlightPathAngle < 80 && targetFlightPathAngle < actualFlightPathAngle) {
+                // Flying too steeply; fly prograde and regulate the flight path with thrust.
+                desiredFlightPathAngle = actualFlightPathAngle;
+            }
 
             Vector3d desiredVelocityUnit = Math.Cos(desiredFlightPathAngle * Math.PI / 180) * desiredHeadingVector
                                          + Math.Sin(desiredFlightPathAngle * Math.PI / 180) * vesselState.up;
@@ -201,6 +210,7 @@ namespace MuMech
 
             if (correctiveSteering)
             {
+
                 Vector3d velocityError = (desiredVelocityUnit - actualVelocityUnit);
 
                 const double Kp = 5.0; //control gain
@@ -219,13 +229,38 @@ namespace MuMech
                 if (steerOffset.magnitude > maxOffset) steerOffset = maxOffset * steerOffset.normalized;
 
                 desiredThrustVector += steerOffset;
+                desiredThrustVector.Normalize();
             }
 
-            desiredThrustVector = desiredThrustVector.normalized;
-
             core.attitude.attitudeTo(desiredThrustVector, AttitudeReference.INERTIAL, this);
+            status = "Gravity turn (" + (int)targetFlightPathAngle + ")";
 
-            status = "Gravity turn";
+            if (autoThrottle)
+            {
+                if (targetFlightPathAngle > 80) {
+                    status = "Pitch over (" + (int)targetFlightPathAngle + ")";
+                    core.thrust.targetThrottle = 1.0f;
+                } else {
+                    // Actually do a gravity turn.  Above we set the heading to fix inclination, and pitch to be prograde.
+                    // Now set throttle to achieve the desired flight path angle.
+                    if (actualFlightPathAngle <= targetFlightPathAngle) {
+                        // Full throttle if we're on track
+                        core.thrust.targetThrottle = 1.0f;
+                    } else {
+                        var desiredFlightPathRadians = desiredFlightPathAngle * (Math.PI / 180.0);
+                        var desiredSpeed = vesselState.speedOrbitHorizontal / Math.Cos(desiredFlightPathRadians);
+                        var actualSpeed = vesselState.speedOrbital;
+
+                        if (desiredSpeed < actualSpeed) {
+                            // let gravity tilt our vector
+                            core.thrust.targetThrottle = core.thrust.SpeedLimitThrottle(actualSpeed, true);
+                        } else {
+                            core.thrust.targetThrottle = core.thrust.SpeedLimitThrottle(desiredSpeed, true);
+                        }
+                    }
+                }
+            }
+
         }
 
         void DriveCoastToApoapsis(FlightCtrlState s)
