@@ -195,8 +195,7 @@ namespace MuMech
             Vector3d actualVelocityUnit = ((1 - referenceFrameBlend) * vesselState.velocityVesselSurfaceUnit
                                            + referenceFrameBlend * vesselState.velocityVesselOrbitUnit).normalized;
 
-            // Blending seems like a bad idea if there's an atmosphere.
-            double actualFlightPathAngle = Math.Acos(Vector3d.Dot(vesselState.velocityVesselSurfaceUnit, vesselState.horizontalSurface)) * 180.0 / Math.PI;
+            double actualFlightPathAngle = 90 - Vector3d.Angle(vesselState.up, actualVelocityUnit);
 
             if (autoThrottle && desiredFlightPathAngle < 80 && desiredFlightPathAngle < actualFlightPathAngle) {
                 // Flying too steeply during gravity turn; fly prograde and regulate the flight path with thrust.
@@ -248,9 +247,28 @@ namespace MuMech
                         // Full throttle if we're on track.
                         core.thrust.targetThrottle = 1.0f;
                     } else {
-                        // Reduced throttle to let the prograde vector fall.
-                        var actualSpeed = vesselState.speedSurface;
-                        core.thrust.targetThrottle = core.thrust.SpeedLimitThrottle(actualSpeed, false);
+                        // Reduced throttle to let the prograde vector fall: maintain vertical velocity.
+
+                        // Gravity, drag, and SRBs.
+                        double fixedForceUp; // kN, negative unless you have lots of SRBs
+                        {
+                            var gravity = - vesselState.localg * vesselState.mass;
+                            var drag = Vector3d.Dot(vesselState.up, vesselState.dragForceVector);
+                            var srbs = Vector3d.Dot(vesselState.up, vesselState.thrustVectorMinThrottle);
+                            fixedForceUp = gravity + drag + srbs;
+                        }
+
+                        // Throttle.
+                        var throttleVector = vesselState.thrustVectorMaxThrottle - vesselState.thrustVectorMinThrottle;
+                        double maxThrustUp = Vector3d.Dot(vesselState.up, throttleVector);
+
+                        // Goal: throttle * maxThrustUp + fixedForceUp = 0
+                        float throttle = 1.0f;
+                        if (maxThrustUp > 1e-6) {
+                            var ratio = -fixedForceUp / maxThrustUp;
+                            throttle = Mathf.Clamp01((float)ratio);
+                        }
+                        core.thrust.targetThrottle = throttle;
                     }
                 }
             }
