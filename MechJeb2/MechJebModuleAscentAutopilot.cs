@@ -147,7 +147,11 @@ namespace MuMech
             raiseApoapsisLastApR = orbit.ApR;
             raiseApoapsisLastUT = vesselState.time;
 
-            return desiredThrottle;
+            // OK, now an actual calculation, which takes drag and engine thrust into account:
+            // vis viva says v = sqrt(mu (2/r - (1/a)))
+            // a is the semimajor axis = apoapsis / (1 + eccentricity)
+            var desiredSpeed = Math.Sqrt(mainBody.gravParameter * (2.0 / vesselState.radius - (1 + vesselState.orbitEccentricity) / finalApR));
+            return core.thrust.SpeedLimitThrottle(desiredSpeed, true);
         }
 
         void DriveGravityTurn(FlightCtrlState s)
@@ -247,9 +251,9 @@ namespace MuMech
                         // Full throttle if we're on track.
                         core.thrust.targetThrottle = 1.0f;
                     } else {
-                        // Reduced throttle to let the prograde vector fall: maintain vertical velocity.
-
-                        // Gravity, drag, and SRBs.
+                        // Reduced throttle to let the prograde vector fall: 
+                        // maintain vertical velocity.
+                        // These forces we can't change: gravity, drag, and SRBs.
                         double fixedForceUp; // kN, negative unless you have lots of SRBs
                         {
                             var gravity = - vesselState.localg * vesselState.mass;
@@ -258,7 +262,7 @@ namespace MuMech
                             fixedForceUp = gravity + drag + srbs;
                         }
 
-                        // Throttle.
+                        // These forces depend on the throttle.
                         var throttleVector = vesselState.thrustVectorMaxThrottle - vesselState.thrustVectorMinThrottle;
                         double maxThrustUp = Vector3d.Dot(vesselState.up, throttleVector);
 
@@ -304,8 +308,7 @@ namespace MuMech
 
             //point prograde and thrust gently if our apoapsis falls below the target
             core.attitude.attitudeTo(Vector3d.forward, AttitudeReference.ORBIT, this);
-            core.thrust.targetThrottle = 0;
-            if (autoThrottle && orbit.ApA < desiredOrbitAltitude)
+            if (autoThrottle)
             {
                 core.thrust.targetThrottle = ThrottleToRaiseApoapsis(orbit.ApR, desiredOrbitAltitude + mainBody.Radius);
             }
