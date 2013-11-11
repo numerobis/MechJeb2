@@ -194,13 +194,14 @@ namespace MuMech
 
             Vector3d actualVelocityUnit = ((1 - referenceFrameBlend) * vesselState.velocityVesselSurfaceUnit
                                            + referenceFrameBlend * vesselState.velocityVesselOrbitUnit).normalized;
-            Vector3d horizontalBlend = ((1 - referenceFrameBlend) * vesselState.horizontalSurface
-                                       + referenceFrameBlend * vesselState.horizontalOrbit).normalized;
-            double actualFlightPathAngle = Math.Acos(Vector3d.Dot(actualVelocityUnit, horizontalBlend)) * 180.0 / Math.PI;
 
-            if (autoThrottle && targetFlightPathAngle < 80 && targetFlightPathAngle < actualFlightPathAngle) {
-                // Flying too steeply; fly prograde and regulate the flight path with thrust.
-                desiredFlightPathAngle = actualFlightPathAngle;
+            // Blending seems like a bad idea if there's an atmosphere.
+            double actualFlightPathAngle = Math.Acos(Vector3d.Dot(vesselState.velocityVesselSurfaceUnit, vesselState.horizontalSurface)) * 180.0 / Math.PI;
+
+            if (autoThrottle && desiredFlightPathAngle < 80 && desiredFlightPathAngle < actualFlightPathAngle) {
+                // Flying too steeply during gravity turn; fly prograde and regulate the flight path with thrust.
+                // (but don't fly steeper than 80 degrees pitch).
+                desiredFlightPathAngle = Math.Min(80, actualFlightPathAngle);
             }
 
             Vector3d desiredVelocityUnit = Math.Cos(desiredFlightPathAngle * Math.PI / 180) * desiredHeadingVector
@@ -244,19 +245,12 @@ namespace MuMech
                     // Actually do a gravity turn.  Above we set the heading to fix inclination, and pitch to be prograde.
                     // Now set throttle to achieve the desired flight path angle.
                     if (actualFlightPathAngle <= targetFlightPathAngle) {
-                        // Full throttle if we're on track
+                        // Full throttle if we're on track.
                         core.thrust.targetThrottle = 1.0f;
                     } else {
-                        var desiredFlightPathRadians = desiredFlightPathAngle * (Math.PI / 180.0);
-                        var desiredSpeed = vesselState.speedOrbitHorizontal / Math.Cos(desiredFlightPathRadians);
-                        var actualSpeed = vesselState.speedOrbital;
-
-                        if (desiredSpeed < actualSpeed) {
-                            // let gravity tilt our vector
-                            core.thrust.targetThrottle = core.thrust.SpeedLimitThrottle(actualSpeed, true);
-                        } else {
-                            core.thrust.targetThrottle = core.thrust.SpeedLimitThrottle(desiredSpeed, true);
-                        }
+                        // Reduced throttle to let the prograde vector fall.
+                        var actualSpeed = vesselState.speedSurface;
+                        core.thrust.targetThrottle = core.thrust.SpeedLimitThrottle(actualSpeed, false);
                     }
                 }
             }
