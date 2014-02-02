@@ -20,6 +20,12 @@ namespace MuMech
 
         public int priority = 0;
 
+        [Persistent(pass = (int)Pass.Local)]
+        public string unlockParts = "";
+        [Persistent(pass = (int)Pass.Local)]
+        public string unlockTechs = "";
+        public bool unlockChecked = false;
+
         public int CompareTo(ComputerModule other)
         {
             if (other == null) return 1;
@@ -124,9 +130,9 @@ namespace MuMech
         {
             try
             {
-                if (global != null) ConfigNode.CreateConfigFromObject(this, (int)Pass.Global).CopyTo(global);
-                if (type != null) ConfigNode.CreateConfigFromObject(this, (int)Pass.Type).CopyTo(type);
-                if (local != null) ConfigNode.CreateConfigFromObject(this, (int)Pass.Local).CopyTo(local);
+                if (global != null) ConfigNode.CreateConfigFromObject(this, (int)Pass.Global, null).CopyTo(global);
+                if (type != null) ConfigNode.CreateConfigFromObject(this, (int)Pass.Type, null).CopyTo(type);
+                if (local != null) ConfigNode.CreateConfigFromObject(this, (int)Pass.Local, null).CopyTo(local);
             }
             catch (Exception e)
             {
@@ -138,9 +144,55 @@ namespace MuMech
         {
         }
 
-        public void print(object message)
+        public virtual void UnlockCheck()
         {
-            MonoBehaviour.print(message);
+            if (!unlockChecked && ResearchAndDevelopment.Instance != null)
+            {
+                bool unlock = true;
+
+                string[] parts = unlockParts.Split(new char[] { ' ', ',', ';', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0)
+                {
+                    unlock = false;
+                    foreach (string p in parts)
+                    {
+                        if (PartLoader.LoadedPartsList.Count(a => a.name == p) > 0 && ResearchAndDevelopment.PartModelPurchased(PartLoader.LoadedPartsList.Where(a => a.name == p).First()))
+                        {
+                            unlock = true;
+                            break;
+                        }
+                    }
+                }
+
+                string[] techs = unlockTechs.Split(new char[] { ' ', ',', ';', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                if (techs.Length > 0)
+                {
+                    if (parts.Length == 0)
+                    {
+                        unlock = false;
+                    }
+                    foreach (string t in techs)
+                    {
+                        if (ResearchAndDevelopment.GetTechnologyState(t) == RDTech.State.Available)
+                        {
+                            unlock = true;
+                            break;
+                        }
+                    }
+                }
+
+                unlockChecked = true;
+                if (!unlock)
+                {
+                    enabled = false;
+                    core.someModuleAreLocked = true;
+                }
+            }
+        }
+
+        public static void print(object message)
+        {
+            MonoBehaviour.print("[MechJeb2] " + message);
         }
     }
 
@@ -166,7 +218,7 @@ namespace MuMech
 
         public new void Add(object user)
         {
-            if (!base.Contains(user))
+            if (user != null && !base.Contains(user))
             {
                 base.Add(user);
             }
@@ -175,7 +227,7 @@ namespace MuMech
 
         public new void Remove(object user)
         {
-            if (base.Contains(user))
+            if (user != null && base.Contains(user))
             {
                 base.Remove(user);
             }

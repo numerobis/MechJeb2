@@ -27,9 +27,12 @@ namespace MuMech
         protected float timeCount = 0;
 
         public bool RCS_auto = false;
-        public bool attitudeRCScontrol = true; 
+        public bool attitudeRCScontrol = true;
 
-        [Persistent(pass = (int)Pass.Local)]
+        [Persistent(pass = (int)Pass.Global)]
+        public bool Tf_autoTune = true;
+
+        [Persistent(pass = (int)(Pass.Local | Pass.Type | Pass.Global))]
         public double Tf = 0.3;
 
         [Persistent(pass = (int)Pass.Global)]
@@ -42,16 +45,12 @@ namespace MuMech
 
         protected AttitudeReference _oldAttitudeReference = AttitudeReference.INERTIAL;
         protected AttitudeReference _attitudeReference = AttitudeReference.INERTIAL;
+        
         public override void OnModuleEnabled()
         {
             timeCount = 50;
         }
-        protected void onFlightStartAtLaunchPad()
-        //protected void onFlightStart()
-        {
-            pid.Reset();
-            lastAct = Vector3d.zero;
-        }
+        
         public AttitudeReference attitudeReference
         {
             get
@@ -99,6 +98,11 @@ namespace MuMech
             }
         }
 
+        [Persistent(pass = (int)Pass.Global | (int)Pass.Type), ToggleInfoItem("Use stock SAS", InfoItem.Category.Vessel)]
+        public bool useSAS = false;
+
+        protected Quaternion lastSAS = new Quaternion();
+
         public double attitudeError;
 
         public MechJebModuleAttitudeController(MechJebCore core)
@@ -107,13 +111,47 @@ namespace MuMech
             priority = 800;
         }
 
-        public override void OnStart(PartModule.StartState state)
+        public override void OnModuleDisabled()
         {
-            double Kd = 0.53 / Tf;
-            double Kp = Kd / (3 * Math.Sqrt(2) * Tf);
-            double Ki = Kp / (12 * Math.Sqrt(2) * Tf);
-            pid = new PIDControllerV2(Kp, Ki, Kd, 1, -1);
+            if (useSAS)
+            {
+                part.vessel.ActionGroups.SetGroup(KSPActionGroup.SAS, false);
+            }
+            base.OnModuleDisabled();
+        }
+
+        public override void OnStart(PartModule.StartState state)
+        {            
+            pid = new PIDControllerV2(0, 0, 0, 1, -1);
+            setPIDParameters();
+            lastAct = Vector3d.zero;
             base.OnStart(state);
+        }
+
+        public void tuneTf()
+        {
+            Vector3d torque = new Vector3d(
+                                    vesselState.torqueAvailable.x + vesselState.torqueThrustPYAvailable * vessel.ctrlState.mainThrottle,
+                                    vesselState.torqueAvailable.y,
+                                    vesselState.torqueAvailable.z + vesselState.torqueThrustPYAvailable * vessel.ctrlState.mainThrottle
+                                          );
+
+            Vector3d ratio = new Vector3d(
+                                    torque.x != 0 ? vesselState.MoI.x / torque.x : 0,
+                                    torque.y != 0 ? vesselState.MoI.y / torque.y : 0,
+                                    torque.z != 0 ? vesselState.MoI.z / torque.z : 0
+                );
+
+            Tf = Mathf.Clamp((float)ratio.magnitude / 20f, 2 * TimeWarp.fixedDeltaTime, 1f);
+
+            setPIDParameters();
+        }
+
+        public void setPIDParameters()
+        {
+            pid.Kd = 0.53 / Tf;
+            pid.Kp = pid.Kd / (3 * Math.Sqrt(2) * Tf);
+            pid.Ki = pid.Kp / (12 * Math.Sqrt(2) * Tf);
         }
 
         public Quaternion attitudeGetReferenceRotation(AttitudeReference reference)
@@ -202,9 +240,12 @@ namespace MuMech
 
         public bool attitudeTo(Vector3d direction, AttitudeReference reference, object controller)
         {
-            bool ok = false;
+            //double ang_diff = Math.Abs(Vector3d.Angle(attitudeGetReferenceRotation(reference) * direction, vesselState.forward));
             double ang_diff = Math.Abs(Vector3d.Angle(attitudeGetReferenceRotation(attitudeReference) * attitudeTarget * Vector3d.forward, attitudeGetReferenceRotation(reference) * direction));
+            
             Vector3 up, dir = direction;
+
+            // TODO : Fix that so it does not roll when it should not. Current fix is a "hack" that set required roll to 0 if !attitudeRollMatters
 
             if (!enabled || (ang_diff > 45))
             {
@@ -215,16 +256,9 @@ namespace MuMech
                 up = attitudeWorldToReference(attitudeReferenceToWorld(attitudeTarget * Vector3d.up, attitudeReference), reference);
             }
             Vector3.OrthoNormalize(ref dir, ref up);
-            ok = attitudeTo(Quaternion.LookRotation(dir, up), reference, controller);
-            if (ok)
-            {
-                _attitudeRollMatters = false;
-                return true;
-            }
-            else
-            {
-                return false;
-            }
+            attitudeTo(Quaternion.LookRotation(dir, up), reference, controller);
+            _attitudeRollMatters = false;
+            return true;
         }
 
         public bool attitudeTo(double heading, double pitch, double roll, object controller)
@@ -261,63 +295,104 @@ namespace MuMech
                     attitudeKILLROT = false;
                 }
                 pid.Reset();
+                lastAct = Vector3d.zero;
 
                 attitudeChanged = false;
             }
+
+            if (Tf_autoTune)
+                tuneTf();
+
         }
 
         public override void Drive(FlightCtrlState s)
         {
-            // Direction we want to be facing
-            Quaternion target = attitudeGetReferenceRotation(attitudeReference) * attitudeTarget;
-            Quaternion delta = Quaternion.Inverse(Quaternion.Euler(90, 0, 0) * Quaternion.Inverse(vessel.GetTransform().rotation) * target);
+            if (useSAS)
+            {
+                Quaternion target = attitudeGetReferenceRotation(attitudeReference) * attitudeTarget * Quaternion.Euler(90, 0, 0);
+                if (!part.vessel.ActionGroups[KSPActionGroup.SAS])
+                {
+                    part.vessel.ActionGroups.SetGroup(KSPActionGroup.SAS, true);
+                    part.vessel.VesselSAS.LockHeading(target);
+                    lastSAS = target;
+                }
+                else if (Quaternion.Angle(lastSAS, target) > 10)
+                {
+                    part.vessel.VesselSAS.LockHeading(target);
+                    lastSAS = target;
+                }
+                else
+                {
+                    part.vessel.VesselSAS.LockHeading(target, true);
+                }
+            }
+            else
+            {
+                // Direction we want to be facing
+                Quaternion target = attitudeGetReferenceRotation(attitudeReference) * attitudeTarget;
+                Quaternion delta = Quaternion.Inverse(Quaternion.Euler(90, 0, 0) * Quaternion.Inverse(vessel.GetTransform().rotation) * target);
 
-            Vector3d deltaEuler = new Vector3d(
-                                                    (delta.eulerAngles.x > 180) ? (delta.eulerAngles.x - 360.0F) : delta.eulerAngles.x,
-                                                    -((delta.eulerAngles.y > 180) ? (delta.eulerAngles.y - 360.0F) : delta.eulerAngles.y),
-                                                    (delta.eulerAngles.z > 180) ? (delta.eulerAngles.z - 360.0F) : delta.eulerAngles.z
+                Vector3d deltaEuler = new Vector3d(
+                                                        (delta.eulerAngles.x > 180) ? (delta.eulerAngles.x - 360.0F) : delta.eulerAngles.x,
+                                                        -((delta.eulerAngles.y > 180) ? (delta.eulerAngles.y - 360.0F) : delta.eulerAngles.y),
+                                                        (delta.eulerAngles.z > 180) ? (delta.eulerAngles.z - 360.0F) : delta.eulerAngles.z
+                                                    );
+
+                Vector3d torque = new Vector3d(
+                                                        vesselState.torqueAvailable.x + vesselState.torqueThrustPYAvailable * s.mainThrottle,
+                                                        vesselState.torqueAvailable.y,
+                                                        vesselState.torqueAvailable.z + vesselState.torqueThrustPYAvailable * s.mainThrottle
                                                 );
 
-            Vector3d torque = new Vector3d(
-                                                    vesselState.torqueAvailable.x + vesselState.torqueThrustPYAvailable * s.mainThrottle,
-                                                    vesselState.torqueAvailable.y,
-                                                    vesselState.torqueAvailable.z + vesselState.torqueThrustPYAvailable * s.mainThrottle
+                Vector3d inertia = Vector3d.Scale(
+                                                        vesselState.angularMomentum.Sign(),
+                                                        Vector3d.Scale(
+                                                            Vector3d.Scale(vesselState.angularMomentum, vesselState.angularMomentum),
+                                                            Vector3d.Scale(torque, vesselState.MoI).Invert()
+                                                        )
+                                                    );
+
+                // ( MoI / avaiable torque ) factor:
+                Vector3d NormFactor = Vector3d.Scale(vesselState.MoI, torque.Invert()).Reorder(132);
+                
+                // Find out the real shorter way to turn were we wan to.
+                // Thanks to HoneyFox
+
+                Vector3d tgtLocalUp = vessel.ReferenceTransform.transform.rotation.Inverse() * target * Vector3d.forward;
+                Vector3d curLocalUp = Vector3d.up;
+
+                double turnAngle = Math.Abs(Vector3d.Angle(curLocalUp, tgtLocalUp));
+                Vector2d rotDirection = new Vector2d(tgtLocalUp.x, tgtLocalUp.z);
+                rotDirection = rotDirection.normalized * turnAngle / 180.0f;
+
+                Vector3d err = new Vector3d(
+                                                -rotDirection.y * Math.PI,
+                                                rotDirection.x * Math.PI,
+                                                attitudeRollMatters?((delta.eulerAngles.z > 180) ? (delta.eulerAngles.z - 360.0F) : delta.eulerAngles.z) * Math.PI / 180.0F : 0F
                                             );
 
-            Vector3d inertia = Vector3d.Scale(
-                                                    vesselState.angularMomentum.Sign(),
-                                                    Vector3d.Scale(
-                                                        Vector3d.Scale(vesselState.angularMomentum, vesselState.angularMomentum),
-                                                        Vector3d.Scale(torque, vesselState.MoI).Invert()
-                                                    )
-                                                );
+                err += inertia.Reorder(132) / 2;
+                err = new Vector3d(Math.Max(-Math.PI, Math.Min(Math.PI, err.x)),
+                                   Math.Max(-Math.PI, Math.Min(Math.PI, err.y)),
+                                   Math.Max(-Math.PI, Math.Min(Math.PI, err.z)));
+                err.Scale(NormFactor);
 
-            // ( MoI / avaiable torque ) factor:
-            Vector3d NormFactor = Vector3d.Scale(vesselState.MoI, torque.Invert()).Reorder(132);
-            
-            // angular error:
-            Vector3d err = deltaEuler * Math.PI / 180.0F;
-            err += inertia.Reorder(132) / 2;
-            err = new Vector3d(Math.Max(-Math.PI, Math.Min(Math.PI, err.x)),
-                               Math.Max(-Math.PI, Math.Min(Math.PI, err.y)),
-                               Math.Max(-Math.PI, Math.Min(Math.PI, err.z)));
-            err.Scale(NormFactor);
+                // angular velocity:
+                Vector3d omega;
+                omega.x = vessel.angularVelocity.x;
+                omega.y = vessel.angularVelocity.z; // y <=> z 
+                omega.z = vessel.angularVelocity.y; // z <=> y 
+                omega.Scale(NormFactor);
 
-            // angular velocity:
-            Vector3d omega;
-            omega.x = vessel.angularVelocity.x; 
-            omega.y = vessel.angularVelocity.z; // y <=> z 
-            omega.z = vessel.angularVelocity.y; // z <=> y 
-            omega.Scale(NormFactor);
-            
-            pidAction = pid.Compute(err, omega);
+                pidAction = pid.Compute(err, omega);
 
-            // low pass filter,  wf = 1/Tf:
-            Vector3d act = lastAct + (pidAction - lastAct) * (1 / ((Tf / TimeWarp.fixedDeltaTime) + 1));                      
-            lastAct = act;
+                // low pass filter,  wf = 1/Tf:
+                Vector3d act = lastAct + (pidAction - lastAct) * (1 / ((Tf / TimeWarp.fixedDeltaTime) + 1));
+                lastAct = act;
 
-            SetFlightCtrlState(act, deltaEuler, s, 1);
-            act = new Vector3d(s.pitch, s.yaw, s.roll);
+                SetFlightCtrlState(act, deltaEuler, s, 1);
+                act = new Vector3d(s.pitch, s.yaw, s.roll);
+            }
         }
 
         private void SetFlightCtrlState(Vector3d act, Vector3d deltaEuler, FlightCtrlState s, float drive_limit)
@@ -339,7 +414,7 @@ namespace MuMech
                 }
             }
 
-            if ( !attitudeRollMatters && userCommandingRoll )
+            if (!attitudeRollMatters)
             {
                 attitudeTo(Quaternion.LookRotation(attitudeTarget * Vector3d.forward, attitudeWorldToReference(-vessel.GetTransform().forward, attitudeReference)), attitudeReference, null);
                 _attitudeRollMatters = false;

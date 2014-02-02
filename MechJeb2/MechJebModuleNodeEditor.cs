@@ -79,6 +79,7 @@ namespace MuMech
                 if (gizmo != null) gizmo.OnGizmoUpdated += GizmoUpdateHandler;
             }
 
+
             GUILayout.BeginHorizontal();
             GuiUtils.SimpleTextBox("Prograde:", prograde, "m/s", 60);
             if (GUILayout.Button("-", GUILayout.ExpandWidth(false)))
@@ -127,14 +128,33 @@ namespace MuMech
             GUILayout.Label("m/s", GUILayout.ExpandWidth(false));
             GUILayout.EndHorizontal();
 
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Set delta to:", GUILayout.ExpandWidth(true));
+            if (GUILayout.Button("0.01", GUILayout.ExpandWidth(true)))
+                progradeDelta = radialPlusDelta = normalPlusDelta = 0.01;
+            if (GUILayout.Button("0.1", GUILayout.ExpandWidth(true)))
+                progradeDelta = radialPlusDelta = normalPlusDelta = 0.1;
+            if (GUILayout.Button("1", GUILayout.ExpandWidth(true)))
+                progradeDelta = radialPlusDelta = normalPlusDelta = 1;
+            if (GUILayout.Button("10", GUILayout.ExpandWidth(true)))
+                progradeDelta = radialPlusDelta = normalPlusDelta = 10;
+            if (GUILayout.Button("100", GUILayout.ExpandWidth(true)))
+                progradeDelta = radialPlusDelta = normalPlusDelta = 100;
+            GUILayout.EndHorizontal();
+
             if (GUILayout.Button("Update")) node.OnGizmoUpdated(new Vector3d(radialPlus, normalPlus, prograde), node.UT);
 
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Shift time by", GUILayout.ExpandWidth(true)))
+            GUILayout.Label("Shift time", GUILayout.ExpandWidth(true));
+            if (GUILayout.Button("-", GUILayout.ExpandWidth(false)))
+            {
+                node.OnGizmoUpdated(node.DeltaV, node.UT - timeOffset);
+            }
+            timeOffset.text = GUILayout.TextField(timeOffset.text, GUILayout.Width(100));
+            if (GUILayout.Button("+", GUILayout.ExpandWidth(false)))
             {
                 node.OnGizmoUpdated(node.DeltaV, node.UT + timeOffset);
             }
-            timeOffset.text = GUILayout.TextField(timeOffset.text, GUILayout.Width(100));
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
@@ -182,6 +202,40 @@ namespace MuMech
             GUILayout.EndHorizontal();
 
             RelativityModeSelectUI();
+
+
+            if (core.node != null)
+            {
+                if (vessel.patchedConicSolver.maneuverNodes.Count > 0 && !core.node.enabled)
+                {
+                    if (GUILayout.Button("Execute next node"))
+                    {
+                        core.node.ExecuteOneNode(this);
+                    }
+
+                    if (vessel.patchedConicSolver.maneuverNodes.Count > 1)
+                    {
+                        if (GUILayout.Button("Execute all nodes"))
+                        {
+                            core.node.ExecuteAllNodes(this);
+                        }
+                    }
+                }
+                else if (core.node.enabled)
+                {
+                    if (GUILayout.Button("Abort node execution"))
+                    {
+                        core.node.Abort();
+                    }
+                }
+
+                GUILayout.BeginHorizontal();
+                core.node.autowarp = GUILayout.Toggle(core.node.autowarp, "Auto-warp", GUILayout.ExpandWidth(true));
+                GUILayout.Label("Tolerance:", GUILayout.ExpandWidth(false));
+                core.node.tolerance.text = GUILayout.TextField(core.node.tolerance.text, GUILayout.Width(35), GUILayout.ExpandWidth(false));
+                GUILayout.Label("m/s", GUILayout.ExpandWidth(false));
+                GUILayout.EndHorizontal();
+            }
 
             GUILayout.EndVertical();
 

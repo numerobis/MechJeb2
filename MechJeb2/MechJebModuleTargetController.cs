@@ -184,8 +184,8 @@ namespace MuMech
             //Restore the saved target when we are made active vessel
             if (!wasActiveVessel && vessel.isActiveVessel)
             {
-                if (target != null)
-                {
+                if (target != null && target.GetVessel() != null)
+                {                    
                     FlightGlobals.fetch.SetVesselTarget(target);
                 }
             }
@@ -202,6 +202,11 @@ namespace MuMech
                 }
             }
 
+
+            // .23 temp fix until I understand better what's going on
+            if (targetBody == null)
+                targetBody = vessel.mainBody;
+            
             //Update targets that need updating:
             if (target is DirectionTarget) ((DirectionTarget)target).Update(targetDirection);
             else if (target is PositionTarget) ((PositionTarget)target).Update(targetBody, targetLatitude, targetLongitude);

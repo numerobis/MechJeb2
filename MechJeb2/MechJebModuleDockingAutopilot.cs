@@ -56,7 +56,7 @@ namespace MuMech
             }
 
             if (forceRol)
-                core.attitude.attitudeTo(Quaternion.LookRotation(Vector3d.back, Vector3d.up) * Quaternion.AngleAxis(-(float)rol, Vector3d.forward), AttitudeReference.TARGET_ORIENTATION, this);
+                core.attitude.attitudeTo(Quaternion.LookRotation(Vector3d.back, Vector3d.up) * Quaternion.AngleAxis(-(float)rol, Vector3d.back), AttitudeReference.TARGET_ORIENTATION, this);
             else
                 core.attitude.attitudeTo(Vector3d.back, AttitudeReference.TARGET_ORIENTATION, this);
 
@@ -108,8 +108,8 @@ namespace MuMech
                     else
                     {
                         //we're not extremely close in z, so keep moving in z but slow enough that we are on docking axis before contact
-                        zVelocityNeeded = Math.Min(zVelocityNeeded, ( Math.Max(zSep,1) * lateralVelocityNeeded.magnitude) / lateralSep.magnitude);
-                        status = "Moving toward the docking axis at " + lateralVelocityNeeded.magnitude.ToString("F2") + " m/s.";
+                        zVelocityNeeded = Math.Min(zVelocityNeeded, (Math.Max(zSep, 2) * lateralVelocityNeeded.magnitude) / lateralSep.magnitude);
+                        status = "Moving toward the docking axis and dock at " + lateralVelocityNeeded.magnitude.ToString("F2") + " m/s.";
                     }
                 }
                 else

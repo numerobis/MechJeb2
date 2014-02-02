@@ -37,10 +37,7 @@ namespace MuMech
             bool wasEnabled = balancer.smartTranslation;
 
             GUILayout.BeginHorizontal();
-            balancer.smartTranslation = GUILayout.Toggle(balancer.smartTranslation, "Smart translation", GUILayout.Width(130));
-            GUIStyle s = new GUIStyle(GUI.skin.label);
-            s.normal.textColor = Color.yellow;
-            GUILayout.Label("experimental", s);
+            balancer.smartTranslation = GUILayout.Toggle(balancer.smartTranslation, "Smart translation", GUILayout.Width(130));            
             GUILayout.EndHorizontal();
 
             if (wasEnabled != balancer.smartTranslation)
@@ -77,6 +74,8 @@ namespace MuMech
                 }
 
                 GUILayout.Label("Overdrive increases power when possible, at the cost of RCS fuel efficiency.");
+
+                balancer.rcsForRotation = GUILayout.Toggle(balancer.rcsForRotation, "Use RCS for rotation");
 
                 // Advanced options
                 balancer.advancedOptions = GUILayout.Toggle(balancer.advancedOptions, "Advanced options");
